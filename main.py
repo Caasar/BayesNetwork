@@ -18,6 +18,7 @@ This allows for a fast inference with low memory requirements.
 import numpy as np
 from numpy.random import randn
 from network import BayesNetwork, BayesAdaptStemmingNode, BayesCategoricalNode
+from itertools import product
 
 path = 'data_recruiting_bi_data_challenge.csv'
 TEST_SIZE = 50000
@@ -81,5 +82,33 @@ network = BayesNetwork(nodes,parents).learn(train,ghost_sample,weighting)
 
 w = np.log(test['clicks']+1)+1
 pred_baseline = np.inner(w,test['clicks'])/w.sum()
+full_cost = netcost(test,network)
 print('Baseline rmse: %.3f' % np.sqrt(measure(test['clicks'],pred_baseline)))
-print('All models: %.3f' % netcost(test,network))
+print('All models: %.3f' % full_cost)
+
+
+fields = {'avg_rank','avg_rel_saving','nmbr_partners_index','avg_price_hotel',
+          'distance_to_center','rating','clicks'}
+
+min_raise = [0,.5,1,5,10,20]
+stems = [8,16,32,48,64,96,128]
+costs = np.zeros((len(nodes),len(min_raise)*len(stems)))
+for run in range(3):
+    for i in range(len(nodes)):
+        tnodes = list(nodes)
+        mcl, odict = tnodes[i]
+        if odict['label'] not in fields:
+            continue
+        for j,(r,s) in enumerate(product(min_raise,stems)):
+            ndict = dict(odict)
+            ndict['min_raise'] = r
+            ndict['stems'] = s
+            tnodes[i] = mcl, ndict
+            print('%s: Setting min_raise=%d, stems=%d'%(ndict['label'],r,s))
+            tnet = BayesNetwork(tnodes,parents).learn(train)
+            tcost = netcost(test,tnet)
+            print('\tcost %.3f (%.3f)'% (tcost,full_cost))
+            if tcost < full_cost:
+                nodes[i] = mcl, ndict
+                full_cost = tcost
+        
