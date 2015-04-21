@@ -8,19 +8,19 @@ Notes
 Defines a simple framework for bayes inference in a bayes network.
 The central class is `BayesNetwork`, which provides all methods to learn 
 the network parameters from provided data and compute posterior values and
-mean estimated for continues variables. 
+mean estimated for continuous variables. 
 
 The Framework defines a number of nodes which can be used to describe the data
 
-- `BayesCategoricalNode` - A node for discrete categorical data.
+- `CategoricalNode` - A node for discrete categorical data.
 
-- `BayesLinearStemmingNode` - Uses linearly spaced buckets to descretize the \
-    continues data.
+- `LinearStemmingNode` - Uses linearly spaced buckets to descretize the \
+    continuous data.
 
-- `BayesAdaptStemmingNode` - Uses an data dependent mapping function to \
-    descretize continues data.
+- `AdaptStemmingNode` - Uses an data dependent mapping function to \
+    descretize continuous data.
 
-- `BayesStemmingNode` - Base class for all continues data approximated by a \
+- `StemmingNode` - Base class for all continuous data approximated by a \
     multinomial distribution using. The bucket boundaries have to be defined \
     by the user.
     
@@ -37,7 +37,7 @@ def build_slice(ind):
     return slice(None) if np.isnan(ind) else slice(int(ind),int(ind)+1)
 build_slice_arr = np.frompyfunc(build_slice,1,1)
 
-class BayesNode(object):
+class Node(object):
     """
     Abstract base class for all bayes nodes.
     """
@@ -53,8 +53,9 @@ class BayesNode(object):
     def parameters(self):
         return {'label':self.label,'points':self.points,'parents':self.parents}
         
-    def prepare(self,data,weighting):
+    def prepare(self,data,weights):
         self.samples = 0.0
+        self.ptable = None
         return self
         
     def set_connections(self,connection):
@@ -84,9 +85,9 @@ class BayesNode(object):
                                         self.dim)
         
     def map_data(self,data):
-        raise RuntimeError('Abstract BayesNode base class')
+        raise RuntimeError('Abstract Node base class')
 
-class BayesCategoricalNode(BayesNode):
+class CategoricalNode(Node):
     """
     Defines a node for categorical data following a multinomial distribution.
     
@@ -105,14 +106,14 @@ class BayesCategoricalNode(BayesNode):
     """
     def __init__(self,label,ids=None,*args,**kwargs):
         points = np.array([]) if ids is None else np.asarray(ids)
-        super(BayesCategoricalNode,self).__init__(label,points,*args,**kwargs)
+        super(CategoricalNode,self).__init__(label,points,*args,**kwargs)
         self.ids = list(ids) if ids is not None else []
         
     def prepare(self,data,weighting):
         x = data[self.label]
         active = ~np.isnan(x)
         self.points = np.asarray(self.ids or np.unique(x[active]))
-        return super(BayesCategoricalNode,self).prepare(data,weighting)
+        return super(CategoricalNode,self).prepare(data,weighting)
         
     def map_data(self,data):
         x = data[self.label]
@@ -123,15 +124,15 @@ class BayesCategoricalNode(BayesNode):
         return idx
 
     def parameters(self):
-        d = super(BayesCategoricalNode,self).parameters()
+        d = super(CategoricalNode,self).parameters()
         del d['points']
         for key in {'ids'}:
             d[key] = getattr(self,key)
         return d
         
-class BayesStemmingNode(BayesNode):
+class StemmingNode(Node):
     """
-    Defines a node for continues data. The data will be approximated with
+    Defines a node for continuous data. The data will be approximated with
     a multinomial distribution by binning the data to buckets using the 
     provided bucket boundaries.
     
@@ -155,7 +156,7 @@ class BayesStemmingNode(BayesNode):
     """
     def __init__(self,label,bounds,cutoff=False,*args,**kwargs):
         bounds = np.atleast_1d(bounds)
-        super(BayesStemmingNode,self).__init__(label,.5*(bounds[1:]+bounds[:-1]),
+        super(StemmingNode,self).__init__(label,.5*(bounds[1:]+bounds[:-1]),
                                                *args,**kwargs)
         self.bounds = bounds
         self.idxmap = np.arange(bounds.size,dtype=float)-.5
@@ -169,7 +170,7 @@ class BayesStemmingNode(BayesNode):
         return self
         
     def parameters(self):
-        d = super(BayesStemmingNode,self).parameters()
+        d = super(StemmingNode,self).parameters()
         del d['ids']
         for key in {'bounds','cutoff'}:
             d[key] = getattr(self,key)
@@ -180,18 +181,18 @@ class BayesStemmingNode(BayesNode):
         return np.interp(data[self.label],self.bounds,self.idxmap,left=bounds,
                          right=bounds)
         
-    def prepare(self,data,weighting):
+    def prepare(self,data,weights):
         x = data[self.label]
         idx = self.map_data(data)
         active = ~np.isnan(idx)
         x = x[active]
         idx = idx[active].astype(int)
         points = np.zeros(self.points.shape)
-        weights = weighting(data[active])
         if weights is None:
             for cid in range(points.size):
                 points[cid] = x[idx==cid].mean()
         else:
+            weights = weights[active]
             for cid in range(points.size):
                 ws = weights[idx==cid]
                 points[cid] = np.inner(x[idx==cid],ws)/ws.sum()
@@ -199,11 +200,11 @@ class BayesStemmingNode(BayesNode):
         mpoints = .5*(self.bounds[1:]-self.bounds[:-1])
         self.points = points
         self.points[np.isnan(points)] = mpoints[np.isnan(points)]
-        return super(BayesStemmingNode,self).prepare(data,weighting)
+        return super(StemmingNode,self).prepare(data,weights)
 
-class BayesLinearStemmingNode(BayesStemmingNode):
+class LinearStemmingNode(StemmingNode):
     """
-    A special node for continues data. This subclass of `BayesStemmingNode` 
+    A special node for continuous data. This subclass of `StemmingNode` 
     defines the boundaries of the buckets by linarly spacing them between
     to minimal and maximal values in the provided training data.
     
@@ -226,28 +227,28 @@ class BayesLinearStemmingNode(BayesStemmingNode):
         default `[]`.
     """
     def __init__(self,label,stems,*args,**kwargs):
-        super(BayesLinearStemmingNode,self).__init__(label,np.arange(stems+1),
+        super(LinearStemmingNode,self).__init__(label,np.arange(stems+1),
                                                     *args,**kwargs)
         self.stems = stems
         
-    def prepare(self,data,weighting):
+    def prepare(self,data,weights):
         x = data[self.label]
         active = ~np.isnan(x)
         low,high = np.percentile(x[active],[1,99])
         bounds = np.linspace(low,high,self.stems+1)
         self.set_bounds(bounds)
-        return super(BayesLinearStemmingNode,self).prepare(data,weighting)
+        return super(LinearStemmingNode,self).prepare(data,weights)
 
     def parameters(self):
-        d = super(BayesLinearStemmingNode,self).parameters()
+        d = super(LinearStemmingNode,self).parameters()
         del d['bounds']
         for key in {'stems'}:
             d[key] = getattr(self,key)
         return d
 
-class BayesAdaptStemmingNode(BayesStemmingNode):
+class AdaptStemmingNode(StemmingNode):
     """
-    A special node for continues data. This subclass of `BayesStemmingNode`
+    A special node for continuous data. This subclass of `StemmingNode`
     used a data dependend mapping to define the boundaries of the buckets. 
     The adaptive mapping is based on a simple approximation of the 
     inverse cumulative distribution function of the provided training data.
@@ -279,12 +280,12 @@ class BayesAdaptStemmingNode(BayesStemmingNode):
     
     """
     def __init__(self,label,stems,min_width=0.0,*args,**kwargs):
-        super(BayesAdaptStemmingNode,self).__init__(label,np.arange(stems+1),
+        super(AdaptStemmingNode,self).__init__(label,np.arange(stems+1),
                                                     *args,**kwargs)
         self.min_width = min_width
         self.stems = stems
         
-    def prepare(self,data,weighting):
+    def prepare(self,data,weights):
         stems = self.stems
         min_width = self.min_width
         x = data[self.label]
@@ -309,16 +310,15 @@ class BayesAdaptStemmingNode(BayesStemmingNode):
             x_perc[0] -= 1e-6*(x_perc[-1]-x_perc[0])
             
         self.set_bounds(x_perc)
-        return super(BayesAdaptStemmingNode,self).prepare(data,weighting)
+        return super(AdaptStemmingNode,self).prepare(data,weights)
 
     def parameters(self):
-        d = super(BayesAdaptStemmingNode,self).parameters()
+        d = super(AdaptStemmingNode,self).parameters()
         del d['bounds']
         for key in {'stems','min_width'}:
             d[key] = getattr(self,key)
         return d
         
-
 class Factor(object):
     def __init__(self,ptable,dim):
         self.ptable = ptable
@@ -346,9 +346,8 @@ class BayesNetwork(object):
     --------
     Create a simple network containing two categorical nodes `A` and `B`.
     
-    >>> network = BayesNetwork([BayesCategoricalNode,{'label':'A'},
-                                BayesCategoricalNode,{'label':'B',
-                                                      'parents':['A']}])
+    >>> network = BayesNetwork([CategoricalNode,{'label':'A'},
+                                CategoricalNode,{'label':'B','parents':['A']}])
                                 
     Define a structured numpy array to hold 100 data samples
     
@@ -364,7 +363,7 @@ class BayesNetwork(object):
     
     Notes
     ------
-    The the order the factorials reduced for the inference is given by
+    The the order the factorials are reduced for the inference is given by
     the order of the provided `nodes` list when creating the network. 
     Therefore. the order can be important for a fast execution. As a general 
     rule the nodes many children should be placed at the end of the list.
@@ -388,7 +387,7 @@ class BayesNetwork(object):
             for p in self.parents[i]:
                 self.conns[p].append(conns[0])
         
-    def learn(self,data,weighting=None,niter=10,em_ignore=None,
+    def learn(self,data,weights=None,niter=10,em_ignore=None,
               ghost_samples=1e-5,batch=1000,file=sys.stdout):
         """
         Learn the network parameters from the provided data.
@@ -397,10 +396,10 @@ class BayesNetwork(object):
         ---------
         data : structured numpy.ndarray
             A structured numpy array containing the data to use.
-        weighting : function,optional
-            If provided the function will be called with the dataset or a 
-            subset of it. It provideds a custom weight for each sample when
-            estimating the probabilities, default `None`.
+        weights : np.ndarray,optional
+            If provided defines a custom weight for each sample when
+            estimating the probabilities, default equal weights for all
+            samples.
         niter : integer,optional
             The number of EM iterations to use, default `5`.
         em_ignore : list,optional
@@ -417,14 +416,14 @@ class BayesNetwork(object):
             to status output, default `sys.stdout`.
             
         Returns
+        -------
         self : BayesNetwork
             Returns a reference to itself
             
         """
-        weighting = weighting or (lambda d: None)
         em_ignore = set(self.labelmap[n] for n in (em_ignore or []))
         for node in self.nodes:
-            node.prepare(data,weighting)
+            node.prepare(data,weights)
         shape = np.array([n.points.size for n in self.nodes])
         
         ids = np.zeros((len(self.nodes),len(data)),dtype=np.object)
@@ -445,8 +444,11 @@ class BayesNetwork(object):
             allactive = ~np.any(cids==nslice,0)
             cids = np.dot(multiplier,cids[:,allactive].astype(int))
             
-            cnts = np.bincount(cids,minlength=maxind,
-                               weights=weighting(data[allactive]))
+            if weights is None:
+                cnts = np.bincount(cids,minlength=maxind)
+            else:
+                cnts = np.bincount(cids,minlength=maxind,
+                                   weights=weights[allactive])
             cnts.shape = tuple(cshape)
             cnts = np.asarray(cnts,dtype=float)
             cnts += ghost_samples/shape[i]
@@ -505,8 +507,11 @@ class BayesNetwork(object):
             cids = ids[inds]
             allactive = ~np.any(cids==nslice,0)
             cids = np.dot(multiplier,cids[:,allactive].astype(int))
-            cnts = np.bincount(cids,minlength=maxind,
-                               weights=weighting(data[allactive]))
+            if weights is None:
+                cnts = np.bincount(cids,minlength=maxind)
+            else:
+                cnts = np.bincount(cids,minlength=maxind,
+                                   weights=weights[allactive])
             cnts = np.asarray(cnts,dtype=float).reshape(fullshape)
             cnts += ghost_samples/shape[dim]
             constcnts[dim] = cnts
@@ -514,6 +519,8 @@ class BayesNetwork(object):
         
         data = data[active]
         ids = ids[:,active]
+        if weights is not None:
+            weights = weights[active]
             
         # precompute the index array required by posterior
         postids = np.zeros((len(self.nodes),len(data)),dtype=float)
@@ -522,7 +529,6 @@ class BayesNetwork(object):
         postids = build_slice_arr(postids.T)
         
         sampleind = np.arange(len(data))
-        w = weighting(data)
         wsub = np.zeros(batch)
         for citer in range(niter):
             for s in range(0,len(data),batch):
@@ -544,15 +550,15 @@ class BayesNetwork(object):
                                                       self.labels[dim],
                                                       postids[sind[missing]]).T
                     
-                if w is not None:
-                    wsub[:sind.size] = w[sind]
+                if weights is not None:
+                    wsub[:sind.size] = weights[sind]
 
                 # update counts
                 for node,cnts,inds,shapes in toupdate:
                     curcnts = posterior[inds[0]].reshape(shapes[0])
                     for i,cshape in zip(inds[1:],shapes[1:]):
                         curcnts = curcnts*posterior[i].reshape(cshape)
-                    if w is None:
+                    if weights is None:
                         cnts += curcnts.sum(-1)
                     else:
                         cnts += np.inner(curcnts,wsub)
@@ -667,6 +673,9 @@ class BayesNetwork(object):
 
     def parameters(self):
         """
-        Returns the node list used to build the network
+        Returns
+        -------
+        nodes : list
+            the node list used to build the network
         """
         return [(type(n),n.parameters()) for n in self.nodes]
