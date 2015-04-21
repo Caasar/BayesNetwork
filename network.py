@@ -604,10 +604,11 @@ class BayesNetwork(object):
             A numpy array of the same shape as the provided data containing
             the computed mean values.
         """
+        node = node or self.labels[-1]
         try:
-            postind = self.labelmap[node or self.labels[-1]]
+            postind = self.labelmap[node]
         except KeyError as err:
-            raise BayesError("Could not find node '%s'" % err)
+            raise BayesError("Could not find node '%s'" % str(err))
         posterior = self.posterior(data,node)
         return np.dot(posterior,self.nodes[postind].points)
     
