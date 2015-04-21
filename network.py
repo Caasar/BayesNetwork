@@ -29,6 +29,7 @@ The Framework defines a number of nodes which can be used to describe the data
 """
 import numpy as np
 import sys
+from numpy.random import rand
 
 class BayesError(Exception):
     pass
@@ -380,12 +381,14 @@ class BayesNetwork(object):
             except KeyError as err:
                 raise BayesError("Could not find node '%s' while building connections" % err)
             
+        self.children = [[] for n in nodes]
         self.roots = [i for i,p in enumerate(self.parents) if not p]
         self.conns = [[Connection(i)] for i in range(len(nodes))]
         for i,(node,conns) in enumerate(zip(self.nodes,self.conns)):
             node.set_connections(conns[0])
             for p in self.parents[i]:
                 self.conns[p].append(conns[0])
+                self.children[p].append(i)
         
     def learn(self,data,weights=None,niter=10,em_ignore=None,
               ghost_samples=1e-5,batch=1000,file=sys.stdout):
@@ -444,13 +447,21 @@ class BayesNetwork(object):
             allactive = ~np.any(cids==nslice,0)
             cids = np.dot(multiplier,cids[:,allactive].astype(int))
             
-            if weights is None:
+            if cids.size == 0:
+                cnts = rand(maxind)
+                cnts /= cnts.sum()
+            elif weights is None:
                 cnts = np.bincount(cids,minlength=maxind)
+            elif np.sum(weights[allactive]) == 0:
+                cnts = rand(maxind)
+                cnts /= cnts.sum()
             else:
                 cnts = np.bincount(cids,minlength=maxind,
                                    weights=weights[allactive])
+                
             cnts.shape = tuple(cshape)
             cnts = np.asarray(cnts,dtype=float)
+                
             cnts += ghost_samples/shape[i]
             
             fullshape = np.ones(shape.shape,dtype=int)
@@ -468,7 +479,9 @@ class BayesNetwork(object):
         neadedparents = set()
         for i,node in enumerate(self.nodes):
             # only probabilities with missing parents have to be updated
-            if np.any(ids[self.parents[i],:]==nslice) and i not in em_ignore:
+            missing_parents = np.any(ids[self.parents[i],:]==nslice)
+            known_children = np.any(ids[i,:]==nslice) and self.children[i]
+            if (missing_parents or known_children) and i not in em_ignore:
                 inds = [i]+self.parents[i]
                 shapes = []
                 nshape = np.ones(len(self.nodes),dtype=int)
@@ -516,6 +529,7 @@ class BayesNetwork(object):
             cnts += ghost_samples/shape[dim]
             constcnts[dim] = cnts
             posterior[dim] = np.zeros((shape[dim],batch))
+        
         
         data = data[active]
         ids = ids[:,active]
@@ -599,45 +613,53 @@ class BayesNetwork(object):
     
     def posterior(self,data,node=None,ids=None):
         """
-        Computes the posterior probabilities of the node given the provided 
-        data.
+        Computes the posterior probabilities of a node given the provided 
+        data or the likelihood of the data for the network.
         
         Parameters
         ----------
         data : structured numpy.ndarray
             A structured numpy array containing the data to use.
         node : string, optional
-            Defines the node which should be predicted, default is the last 
-            node in the network.
+            Defines the node which should be predicted. If node is `None` no 
+            node will be used and the likelihood of the sample will 
+            be returned.
             
         Returns
         --------
         posterior : np.ndarray
             A numpy array containing the computed posterior probabilities.
         """
-        try:
-            postind = self.labelmap[node or self.labels[-1]]
-        except KeyError as err:
-            raise BayesError("Could not find node '%s'" % err)
+        if node is not None:
+            try:
+                postind = self.labelmap[node]
+            except KeyError as err:
+                raise BayesError("Could not find node '%s'" % err)
+        else:
+            postind = -1
         
         if ids is None:
             ids = np.zeros((len(self.nodes),len(data)),dtype=float)
             for i,node in enumerate(self.nodes):
                 ids[i] = node.map_data(data)
-            ids[postind,:] = np.NaN
+            if postind >= 0:
+                ids[postind,:] = np.NaN
             ids = build_slice_arr(ids.T)
         else:
             ids = ids.copy()
-            ids[:,:postind] = slice(None)
+            if postind >= 0:
+                ids[:,postind] = slice(None)
             
         
         # define hellper variable to check if any factors remain to be reduced
         testind = [slice(None) for n in self.nodes]
-        testind[postind] = 0
+        if postind >= 0:
+            testind[postind] = 0
+            posterior = np.zeros((data.size,self.shape[postind]))
+        else:
+            posterior = np.zeros(data.size)
         testind = tuple(testind)
         postconns = self.conns[postind]
-        
-        posterior = np.zeros((data.size,self.shape[postind]))
         for i,cind in enumerate(ids):
             for node in self.nodes:
                 node.fill_factor(cind)
@@ -659,15 +681,17 @@ class BayesNetwork(object):
                     for conn in conns[1:]:
                         conn.factor = factor
             
-            cunused = unused[postind]
-            cunused[postconns[0].factor.id] = False
-            ptable = postconns[0].factor.ptable
-            for conn in postconns[1:]:
-                if cunused[conn.factor.id]:
-                    ptable = ptable*conn.factor.ptable
-                    cunused[conn.factor.id] = False
-            
-            posterior[i] = ptable.ravel()/ptable.sum()
+            if postind < 0:
+                posterior[i] = postconns[0].factor.ptable.squeeze()
+            else:
+                cunused = unused[postind]
+                cunused[postconns[0].factor.id] = False
+                ptable = postconns[0].factor.ptable
+                for conn in postconns[1:]:
+                    if cunused[conn.factor.id]:
+                        ptable = ptable*conn.factor.ptable
+                        cunused[conn.factor.id] = False
+                posterior[i] = ptable.ravel()/ptable.sum()
             
         return posterior
 

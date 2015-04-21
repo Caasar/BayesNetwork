@@ -158,8 +158,9 @@ print('Predict unknown clicks...')
 prediction = np.zeros(unknown.shape,dtype=[('hotel_id', '<u8'), ('clicks', '<u8')])
 prediction['hotel_id'] = unknown['hotel_id']
 prediction['clicks'] = network.mean_prediction(unknown)
-print('Predict unknown clicks...')
+print('finished')
 
 print("Save prediction to csv file '%s'..." % outpath)
 np.savetxt(outpath,prediction,delimiter=',',fmt='%u')
+print('finished')
 
